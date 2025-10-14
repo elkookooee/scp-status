@@ -1,0 +1,246 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Skyhigh Client Proxy Monitoring Server'
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+  
+  ApiKey:
+    Type: String
+    Default: skyhighclientproxy
+    NoEcho: true
+  
+  AllowedCIDR:
+    Type: String
+    Default: 0.0.0.0/0
+  
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+
+Resources:
+  MonitoringSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Skyhigh monitoring server
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref AllowedCIDR
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedCIDR
+
+  MonitoringEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+  MonitoringInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}'
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref MonitoringSecurityGroup
+      IamInstanceProfile: !Ref InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y python3 python3-pip
+          pip3 install flask gunicorn
+          
+          mkdir -p /opt/monitoring
+          cd /opt/monitoring
+          
+          cat > app.py << 'APPEOF'
+          from flask import Flask, request, jsonify
+          from datetime import datetime
+          import threading
+          import json
+          
+          app = Flask(__name__)
+          client_statuses = {}
+          lock = threading.Lock()
+          API_KEY = "${ApiKey}"
+          
+          HTML_TEMPLATE = """<!DOCTYPE html>
+          <html>
+          <head>
+              <title>Skyhigh Monitoring</title>
+              <style>
+                  * { margin: 0; padding: 0; }
+                  body {
+                      font-family: system-ui;
+                      background: linear-gradient(135deg, #667eea, #764ba2);
+                      min-height: 100vh;
+                      padding: 20px;
+                  }
+                  h1 {
+                      color: #fff;
+                      text-align: center;
+                      margin: 20px;
+                  }
+                  .grid {
+                      display: grid;
+                      grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+                      gap: 20px;
+                  }
+                  .card {
+                      background: #fff;
+                      border-radius: 12px;
+                      padding: 20px;
+                  }
+                  .computer-name {
+                      font-size: 1.2em;
+                      font-weight: 700;
+                      margin-bottom: 10px;
+                  }
+                  .status-badge {
+                      padding: 5px 10px;
+                      border-radius: 5px;
+                      font-size: 0.8em;
+                      font-weight: 600;
+                  }
+                  .connected {
+                      background: #d1fae5;
+                      color: #065f46;
+                  }
+                  .disconnected {
+                      background: #fee2e2;
+                      color: #991b1b;
+                  }
+                  .info {
+                      margin: 5px 0;
+                      font-size: 0.9em;
+                  }
+              </style>
+          </head>
+          <body>
+              <h1>Skyhigh Monitoring Dashboard</h1>
+              <div id="grid" class="grid"></div>
+              <script>
+                  let data = __CLIENT_DATA__;
+                  document.getElementById('grid').innerHTML = Object.entries(data).map(([n, d]) => 
+                      '<div class="card">' +
+                      '<div class="computer-name">' + n + '</div>' +
+                      '<div class="status-badge ' + (d['Connection Status'] === 'Connected' ? 'connected' : 'disconnected') + '">' +
+                      (d['Connection Status'] || 'Unknown') + '</div>' +
+                      '<div class="info">Version: ' + (d['Version Number'] || 'N/A') + '</div>' +
+                      '<div class="info">Policy: ' + (d['Policy Revision'] || 'N/A') + '</div>' +
+                      '</div>'
+                  ).join('');
+                  setTimeout(() => location.reload(), 30000);
+              </script>
+          </body>
+          </html>"""
+          
+          @app.route('/')
+          def dashboard():
+              with lock:
+                  client_data_json = json.dumps(client_statuses)
+                  html = HTML_TEMPLATE.replace('__CLIENT_DATA__', client_data_json)
+                  return html
+          
+          @app.route('/api/status', methods=['POST'])
+          def receive_status():
+              auth = request.headers.get('Authorization', '')
+              if not auth.startswith('Bearer ') or auth[7:] != API_KEY:
+                  return jsonify({'error': 'Unauthorized'}), 401
+              try:
+                  data = request.json
+                  name = data.get('ComputerName', 'Unknown')
+                  data['LastUpdated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                  with lock:
+                      client_statuses[name] = data
+                  return jsonify({'status': 'success'}), 200
+              except:
+                  return jsonify({'error': 'Bad request'}), 400
+          
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=8000)
+          APPEOF
+          
+          cat > /etc/systemd/system/monitoring.service << 'SVCEOF'
+          [Unit]
+          Description=Monitoring Server
+          [Service]
+          WorkingDirectory=/opt/monitoring
+          ExecStart=/usr/bin/python3 -m gunicorn --workers 2 --bind 0.0.0.0:8000 app:app
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+          SVCEOF
+          
+          # Generate self-signed SSL certificate
+          mkdir -p /etc/ssl/private
+          openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout /etc/ssl/private/nginx-selfsigned.key \
+            -out /etc/ssl/certs/nginx-selfsigned.crt \
+            -subj "/C=US/ST=State/L=City/O=Organization/CN=${MonitoringEIP}"
+
+          amazon-linux-extras install -y nginx1
+          cat > /etc/nginx/conf.d/monitoring.conf << 'NGXEOF'
+          server {
+              listen 443 ssl;
+              ssl_certificate /etc/ssl/certs/nginx-selfsigned.crt;
+              ssl_certificate_key /etc/ssl/private/nginx-selfsigned.key;
+              ssl_protocols TLSv1.2 TLSv1.3;
+              ssl_ciphers HIGH:!aNULL:!MD5;
+
+              location / {
+                  proxy_pass http://127.0.0.1:8000;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+          }
+          NGXEOF
+
+          systemctl daemon-reload
+          systemctl enable monitoring nginx
+          systemctl start monitoring nginx
+
+  EIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref MonitoringInstance
+      AllocationId: !GetAtt MonitoringEIP.AllocationId
+
+Outputs:
+  PublicIP:
+    Value: !Ref MonitoringEIP
+
+  DashboardURL:
+    Value: !Sub 'https://${MonitoringEIP}'
+    Description: 'HTTPS Dashboard URL (accept browser certificate warning for self-signed cert)'
+
+  APIEndpoint:
+    Value: !Sub 'https://${MonitoringEIP}/api/status'
+    Description: 'HTTPS API Endpoint (clients need to skip certificate validation)'
