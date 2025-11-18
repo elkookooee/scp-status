@@ -1,5 +1,5 @@
 # Hardcoded configuration - hidden from end users
-$RemoteServer = "https://3.131.116.33/api/status"
+$RemoteServer = "https://13.59.39.162/api/status"
 $ApiKey = "skyhighclientproxy"
 
 # Skip SSL certificate validation for self-signed cert
@@ -38,7 +38,7 @@ $status = @{
 $regPathAbout = "HKLM:\SOFTWARE\Skyhigh\SCP\About"
 $regPathGeneral = "HKLM:\SOFTWARE\Skyhigh\SCP\General"
 
-# Get Version Number from registry
+# Get Version Number from General key
 try {
     $version = Get-ItemProperty -Path $regPathGeneral -Name "Version" -ErrorAction Stop
     $status["Version Number"] = $version.Version
@@ -46,21 +46,28 @@ try {
     $status["Version Number"] = "Unknown"
 }
 
-# Get Connection Status from registry
+# Get ALL properties from the About registry key
 try {
-    $connectionStatus = Get-ItemProperty -Path $regPathAbout -Name "Connection Status" -ErrorAction Stop
-    $status["Connection Status"] = $connectionStatus.'Connection Status'
-} catch {
-    $status["Connection Status"] = "Unknown"
-}
+    $aboutProps = Get-ItemProperty -Path $regPathAbout -ErrorAction Stop
 
-# Get Policy Revision from registry (DWORD value)
-try {
-    $policyRev = Get-ItemProperty -Path $regPathAbout -Name "Policy Revision" -ErrorAction Stop
-    $revisionNumber = $policyRev.'Policy Revision'
-    $status["Policy Revision"] = "U-" + $revisionNumber
+    # PowerShell adds these metadata properties - filter them out
+    $excludeProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
+
+    # Add all registry values to status
+    $aboutProps.PSObject.Properties | Where-Object { $excludeProps -notcontains $_.Name } | ForEach-Object {
+        $name = $_.Name
+        $value = $_.Value
+
+        # Special handling for Policy Revision (DWORD) - format as U-###
+        if ($name -eq "Policy Revision" -and $value -is [int]) {
+            $status[$name] = "U-" + $value
+        } else {
+            $status[$name] = $value
+        }
+    }
 } catch {
-    $status["Policy Revision"] = "Unknown"
+    # If registry key doesn't exist, add placeholder
+    $status["Registry Status"] = "SCP Not Installed"
 }
 
 # Convert to JSON
