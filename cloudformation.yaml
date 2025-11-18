@@ -90,7 +90,7 @@ Resources:
           lock = threading.Lock()
           API_KEY = "${ApiKey}"
           CLEANUP_INTERVAL = 60  # Run cleanup every 60 seconds
-          STATUS_RETENTION_MINUTES = 5  # Keep client status for 5 minutes
+          STATUS_RETENTION_MINUTES = 7  # Keep client status for 7 minutes (for 5-min script interval)
           
           HTML_TEMPLATE = """<!DOCTYPE html>
           <html>
@@ -412,7 +412,7 @@ Resources:
           Description=Monitoring Server
           [Service]
           WorkingDirectory=/opt/monitoring
-          ExecStart=/usr/bin/python3 -m gunicorn --workers 2 --bind 0.0.0.0:8000 app:app
+          ExecStart=/usr/bin/python3 -m gunicorn --workers 1 --bind 0.0.0.0:8000 app:app
           Restart=always
           [Install]
           WantedBy=multi-user.target
