@@ -1,0 +1,41 @@
+# SSH Keys and Certificates
+*.pem
+*.key
+*.pfx
+*.p12
+*.cer
+*.crt
+
+# AWS Credentials
+.aws/
+*.credentials
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# API Keys and Secrets
+secrets.yaml
+secrets.json
+apikeys.txt
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
