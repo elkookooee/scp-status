@@ -133,11 +133,12 @@ Resources:
                   .list-container {
                       background: #fff;
                       border-radius: 12px;
-                      overflow: hidden;
+                      overflow-x: auto;
                       box-shadow: 0 4px 6px rgba(0,0,0,0.1);
                   }
                   table {
                       width: 100%;
+                      min-width: 800px;
                       border-collapse: collapse;
                   }
                   thead {
@@ -152,6 +153,7 @@ Resources:
                       font-size: 0.9em;
                       text-transform: uppercase;
                       letter-spacing: 0.5px;
+                      white-space: nowrap;
                   }
                   tbody tr {
                       border-bottom: 1px solid #e5e7eb;
@@ -166,6 +168,7 @@ Resources:
                   td {
                       padding: 16px;
                       color: #1f2937;
+                      white-space: nowrap;
                   }
                   .computer-name {
                       font-weight: 600;
@@ -210,14 +213,8 @@ Resources:
                   </div>
                   <div class="list-container">
                       <table>
-                          <thead>
-                              <tr>
-                                  <th>Computer Name</th>
-                                  <th>Status</th>
-                                  <th>Version</th>
-                                  <th>Policy Revision</th>
-                                  <th>Last Updated</th>
-                              </tr>
+                          <thead id="table-header">
+                              <tr></tr>
                           </thead>
                           <tbody id="client-list"></tbody>
                       </table>
@@ -227,6 +224,33 @@ Resources:
               <script>
                   let clientData = __CLIENT_DATA__;
                   let clientEntries = Object.entries(clientData);
+
+                  // Collect all unique field names across all clients
+                  let allFields = new Set();
+                  clientEntries.forEach(([name, data]) => {
+                      Object.keys(data).forEach(key => allFields.add(key));
+                  });
+
+                  // Define field order priority (fields not in this list will appear after)
+                  const fieldOrder = ['ComputerName', 'Connection Status', 'Status', 'Version Number',
+                                     'Policy Revision', 'Policy Name', 'Policy Timestamp', 'EspMode',
+                                     'Timestamp', 'LastUpdated'];
+
+                  // Sort fields: prioritized fields first, then alphabetically
+                  let sortedFields = Array.from(allFields).sort((a, b) => {
+                      const aIndex = fieldOrder.indexOf(a);
+                      const bIndex = fieldOrder.indexOf(b);
+                      if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+                      if (aIndex !== -1) return -1;
+                      if (bIndex !== -1) return 1;
+                      return a.localeCompare(b);
+                  });
+
+                  // Generate table header
+                  const thead = document.getElementById('table-header').querySelector('tr');
+                  thead.innerHTML = sortedFields.map(field => {
+                      return '<th>' + field + '</th>';
+                  }).join('');
 
                   function renderClients(filter = '') {
                       const tbody = document.getElementById('client-list');
@@ -238,15 +262,25 @@ Resources:
                           const matches = name.toLowerCase().includes(filterLower);
                           if (matches) visibleCount++;
 
-                          return '<tr class="' + (matches ? '' : 'hidden') + '">' +
-                              '<td class="computer-name">' + name + '</td>' +
-                              '<td><span class="status-badge ' +
-                              (data['Connection Status'] === 'Connected' ? 'connected' : 'disconnected') + '">' +
-                              (data['Connection Status'] || 'Unknown') + '</span></td>' +
-                              '<td>' + (data['Version Number'] || 'N/A') + '</td>' +
-                              '<td>' + (data['Policy Revision'] || 'N/A') + '</td>' +
-                              '<td>' + (data['LastUpdated'] || 'N/A') + '</td>' +
-                              '</tr>';
+                          const cells = sortedFields.map(field => {
+                              let value = field === 'ComputerName' ? name : (data[field] || 'N/A');
+
+                              // Special formatting for Connection Status
+                              if (field === 'Connection Status') {
+                                  const isConnected = value === 'Connected' || value === 'No connectivity';
+                                  const badgeClass = value === 'Connected' ? 'connected' : 'disconnected';
+                                  return '<td><span class="status-badge ' + badgeClass + '">' + value + '</span></td>';
+                              }
+
+                              // Bold computer name
+                              if (field === 'ComputerName') {
+                                  return '<td class="computer-name">' + value + '</td>';
+                              }
+
+                              return '<td>' + value + '</td>';
+                          }).join('');
+
+                          return '<tr class="' + (matches ? '' : 'hidden') + '">' + cells + '</tr>';
                       }).join('');
 
                       noResults.style.display = visibleCount === 0 ? 'block' : 'none';
