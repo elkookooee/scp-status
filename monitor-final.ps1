@@ -29,13 +29,38 @@ if ($PSVersionTable.PSVersion.Major -ge 6) {
 $computerName = $env:COMPUTERNAME
 
 # Gather Skyhigh Client Proxy status
-# This is a placeholder - customize based on your actual monitoring needs
 $status = @{
     ComputerName = $computerName
     Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    "Connection Status" = "Connected"
-    "Version Number" = "1.0.0"
-    "Policy Revision" = "Latest"
+}
+
+# Read registry keys for Skyhigh Client Proxy status
+$regPathAbout = "HKLM:\SOFTWARE\Skyhigh\SCP\About"
+$regPathGeneral = "HKLM:\SOFTWARE\Skyhigh\SCP\General"
+
+# Get Version Number from registry
+try {
+    $version = Get-ItemProperty -Path $regPathGeneral -Name "Version" -ErrorAction Stop
+    $status["Version Number"] = $version.Version
+} catch {
+    $status["Version Number"] = "Unknown"
+}
+
+# Get Connection Status from registry
+try {
+    $connectionStatus = Get-ItemProperty -Path $regPathAbout -Name "Connection Status" -ErrorAction Stop
+    $status["Connection Status"] = $connectionStatus.'Connection Status'
+} catch {
+    $status["Connection Status"] = "Unknown"
+}
+
+# Get Policy Revision from registry (DWORD value)
+try {
+    $policyRev = Get-ItemProperty -Path $regPathAbout -Name "Policy Revision" -ErrorAction Stop
+    $revisionNumber = $policyRev.'Policy Revision'
+    $status["Policy Revision"] = "U-" + $revisionNumber
+} catch {
+    $status["Policy Revision"] = "Unknown"
 }
 
 # Convert to JSON
