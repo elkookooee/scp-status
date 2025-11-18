@@ -80,14 +80,17 @@ Resources:
           
           cat > app.py << 'APPEOF'
           from flask import Flask, request, jsonify
-          from datetime import datetime
+          from datetime import datetime, timedelta
           import threading
           import json
-          
+          import time
+
           app = Flask(__name__)
           client_statuses = {}
           lock = threading.Lock()
           API_KEY = "${ApiKey}"
+          CLEANUP_INTERVAL = 60  # Run cleanup every 60 seconds
+          STATUS_RETENTION_MINUTES = 5  # Keep client status for 5 minutes
           
           HTML_TEMPLATE = """<!DOCTYPE html>
           <html>
@@ -165,6 +168,9 @@ Resources:
                   tbody tr.hidden {
                       display: none;
                   }
+                  tbody tr.stale {
+                      opacity: 0.5;
+                  }
                   td {
                       padding: 16px;
                       color: #1f2937;
@@ -189,6 +195,10 @@ Resources:
                   .disconnected {
                       background: #fee2e2;
                       color: #991b1b;
+                  }
+                  .stale-badge {
+                      background: #fef3c7;
+                      color: #92400e;
                   }
                   .no-results {
                       text-align: center;
@@ -234,7 +244,7 @@ Resources:
                   // Define field order priority (fields not in this list will appear after)
                   const fieldOrder = ['ComputerName', 'Connection Status', 'Status', 'Version Number',
                                      'Policy Revision', 'Policy Name', 'Policy Timestamp', 'EspMode',
-                                     'Timestamp', 'LastUpdated'];
+                                     'Active Proxy', 'PA Status', 'PA Access', 'Timestamp', 'LastUpdated'];
 
                   // Sort fields: prioritized fields first, then alphabetically
                   let sortedFields = Array.from(allFields).sort((a, b) => {
@@ -252,6 +262,14 @@ Resources:
                       return '<th>' + field + '</th>';
                   }).join('');
 
+                  function isStale(lastUpdated) {
+                      if (!lastUpdated) return false;
+                      const now = new Date();
+                      const updated = new Date(lastUpdated);
+                      const diffMinutes = (now - updated) / 1000 / 60;
+                      return diffMinutes > 2;  // Mark as stale after 2 minutes
+                  }
+
                   function renderClients(filter = '') {
                       const tbody = document.getElementById('client-list');
                       const noResults = document.getElementById('no-results');
@@ -262,13 +280,16 @@ Resources:
                           const matches = name.toLowerCase().includes(filterLower);
                           if (matches) visibleCount++;
 
+                          const stale = isStale(data.LastUpdated);
+                          const rowClass = (matches ? '' : 'hidden') + (stale ? ' stale' : '');
+
                           const cells = sortedFields.map(field => {
                               let value = field === 'ComputerName' ? name : (data[field] || 'N/A');
 
                               // Special formatting for Connection Status
                               if (field === 'Connection Status') {
-                                  const isConnected = value === 'Connected' || value === 'No connectivity';
-                                  const badgeClass = value === 'Connected' ? 'connected' : 'disconnected';
+                                  const badgeClass = stale ? 'stale-badge' :
+                                                    (value === 'Connected' ? 'connected' : 'disconnected');
                                   return '<td><span class="status-badge ' + badgeClass + '">' + value + '</span></td>';
                               }
 
@@ -280,7 +301,7 @@ Resources:
                               return '<td>' + value + '</td>';
                           }).join('');
 
-                          return '<tr class="' + (matches ? '' : 'hidden') + '">' + cells + '</tr>';
+                          return '<tr class="' + rowClass + '">' + cells + '</tr>';
                       }).join('');
 
                       noResults.style.display = visibleCount === 0 ? 'block' : 'none';
@@ -305,7 +326,33 @@ Resources:
               </script>
           </body>
           </html>"""
-          
+
+          def cleanup_old_clients():
+              """Remove clients that haven't reported in STATUS_RETENTION_MINUTES"""
+              while True:
+                  time.sleep(CLEANUP_INTERVAL)
+                  with lock:
+                      now = datetime.now()
+                      to_remove = []
+                      for name, data in client_statuses.items():
+                          last_updated_str = data.get('LastUpdated')
+                          if last_updated_str:
+                              try:
+                                  last_updated = datetime.strptime(last_updated_str, '%Y-%m-%d %H:%M:%S')
+                                  age_minutes = (now - last_updated).total_seconds() / 60
+                                  if age_minutes > STATUS_RETENTION_MINUTES:
+                                      to_remove.append(name)
+                              except:
+                                  pass
+
+                      for name in to_remove:
+                          del client_statuses[name]
+                          print(f"Removed stale client: {name}")
+
+          # Start cleanup thread
+          cleanup_thread = threading.Thread(target=cleanup_old_clients, daemon=True)
+          cleanup_thread.start()
+
           @app.route('/')
           def dashboard():
               with lock:
